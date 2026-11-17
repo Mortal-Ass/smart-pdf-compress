@@ -183,9 +183,13 @@ def compress_pdf(source, output_dir=None, log=print, size_first=False):
             if size <= LIMIT:
                 break
         raster_paths = set()
+        raster_choice = None
         if size_first and not any(c[0] <= LIMIT for c in candidates):
             print("结构保留方案未达标，开始有限的整页图片方案；文字选择、链接和交互功能将丢失。")
-            for dpi, quality in [(100, 40), (90, 32), (90, 20), (85, 20), (80, 20)]:
+            previous = None
+            for dpi, quality in [(300, 85), (240, 85), (200, 85), (160, 85),
+                                 (130, 65), (110, 50), (100, 40), (90, 32),
+                                 (90, 20), (85, 20), (80, 20)]:
                 target = Path(temp) / f"raster_{dpi}_{quality}.pdf"
                 raster_candidate(original, target, dpi, quality, log)
                 check(target, original, log, compare_text=False)
@@ -194,8 +198,29 @@ def compress_pdf(source, output_dir=None, log=print, size_first=False):
                 candidates.append((size, target, dpi, quality))
                 print(f"整页图片方案：{dpi} DPI，JPEG {quality}，{size / 1024:.1f} KB", flush=True)
                 if size <= LIMIT:
+                    raster_choice = candidates[-1]
+                    # Refine the boundary, retaining only validated candidates.
+                    # Fixed JPEG quality makes DPI the quality-ranking criterion.
+                    if previous and previous[1] == quality:
+                        low, high = dpi, previous[0]
+                        for _ in range(6):
+                            mid = (low + high) // 2
+                            if mid <= low:
+                                break
+                            refined = Path(temp) / f"refined_{mid}_{quality}.pdf"
+                            print(f"利用剩余空间提高画质：{mid} DPI，JPEG {quality}", flush=True)
+                            raster_candidate(original, refined, mid, quality, log)
+                            refined_size = refined.stat().st_size
+                            if refined_size <= LIMIT:
+                                check(refined, original, log, compare_text=False)
+                                raster_paths.add(refined)
+                                raster_choice = (refined_size, refined, mid, quality)
+                                low = mid
+                            else:
+                                high = mid
                     break
-        best = next((c for c in candidates if c[0] <= LIMIT), min(candidates))
+                previous = (dpi, quality)
+        best = raster_choice or next((c for c in candidates if c[0] <= LIMIT), min(candidates))
         size, path, dpi, quality = best
         rasterized = path in raster_paths
         status = "compressed" if size <= LIMIT else "best_effort_OVER_LIMIT"
