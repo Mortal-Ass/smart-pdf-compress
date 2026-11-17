@@ -2,7 +2,17 @@
 
 中文 Windows 桌面 PDF 压缩工具。目标 1024KB，保留全部页面、顺序、尺寸及方向，不覆盖原文件。处理在本机进行，无需 Ghostscript。
 
-## 运行
+## 懒人版：Windows 一键下载
+
+[下载 Windows 64 位免安装版](https://github.com/Mortal-Ass/smart-pdf-compress/releases/latest/download/PDF_Compress_Windows_x64.zip)
+
+下载后先解压，双击 `PDF_Compress.exe` → 选择 PDF → 开始压缩。无需安装 Python、依赖库或 Ghostscript。
+
+普通模式无法达到大小目标时，可勾选“优先达标”重试；此模式可能降低小字和二维码清晰度，并失去文字复制、链接和交互功能。不保证任意 PDF 都能压到 1024KB。
+
+仅支持 Windows 64 位；所有文件均在本机处理，不会上传 PDF。
+
+## 源码运行
 
 需要 Python 3.10+（桌面窗口需要 tkinter）。
 
