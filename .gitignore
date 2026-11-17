@@ -9,3 +9,5 @@ dist/
 *.spec
 release_package/
 *.zip
+mobile-build/
+node_modules/

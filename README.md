@@ -2,7 +2,17 @@
 
 中文 Windows 桌面 PDF 压缩工具。目标 1024KB，保留全部页面、顺序、尺寸及方向，不覆盖原文件。处理在本机进行，无需 Ghostscript。
 
-## 懒人版：Windows 一键下载
+## 手机本地版
+
+[手机浏览器打开使用](https://mortal-ass.github.io/smart-pdf-compress/)
+
+无需登录，选择 PDF 后在浏览器内存中逐页处理，不上传 PDF。首次打开需联网下载同源的 PDF.js / pdf-lib 组件，没有统计脚本。建议使用较新的 Safari / Chrome；首版限制 30MB、100 页，处理时保持页面前台。手机本地版采用整页图片转换，文字选择、链接、表单和签名功能不再保留；二维码需实际扫码验证。保留页面顺序、裁剪区域与旋转，生成后逐页重新打开并渲染检查；无法保证所有文件均达到 1024KB。
+
+页面源码位于 `docs/`，静态托管于 GitHub Pages。浏览器会为获取网页和组件向 GitHub Pages 发起请求，PDF 字节不发送到网络。尚未覆盖所有 Android / iOS 真机，请先用副本验证。
+
+手机网页开发：`npm ci` 安装锁定的依赖，`node scripts/vendor-mobile.cjs` 更新同源组件，`python -m http.server 8765 --directory docs` 本地预览。测试：`node tests/mobile-smoke.cjs 输入PDF绝对路径 输出PDF绝对路径`；此测试使用 Node 原生 canvas 检查同一份网页压缩代码，不替代手机浏览器真机测试。网页 PDF.js（Apache-2.0）、pdf-lib（MIT）及附属字体/解码器许可证保存在 `docs/vendor/`。
+
+## Windows 一键下载
 
 [下载 Windows 64 位免安装版](https://github.com/Mortal-Ass/smart-pdf-compress/releases/latest/download/PDF_Compress_Windows_x64.zip)
 

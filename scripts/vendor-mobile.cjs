@@ -1,0 +1,13 @@
+const fs=require('node:fs');
+const path=require('node:path');
+const root=path.resolve(__dirname,'..');
+const dest=path.join(root,'docs/vendor');
+fs.mkdirSync(dest,{recursive:true});
+const src=path.dirname(require.resolve('pdfjs-dist/package.json'));
+for(const name of ['pdf.mjs','pdf.worker.mjs'])fs.copyFileSync(path.join(src,'legacy/build',name),path.join(dest,name));
+for(const name of ['cmaps','standard_fonts','wasm'])fs.cpSync(path.join(src,name),path.join(dest,name),{recursive:true});
+fs.copyFileSync(path.join(src,'LICENSE'),path.join(dest,'PDFJS_LICENSE'));
+const lib=path.dirname(require.resolve('pdf-lib/package.json'));
+fs.copyFileSync(path.join(lib,'dist/pdf-lib.min.js'),path.join(dest,'pdf-lib.min.js'));
+fs.copyFileSync(path.join(lib,'LICENSE.md'),path.join(dest,'PDFLIB_LICENSE.md'));
+fs.writeFileSync(path.join(dest,'VERSIONS.json'),JSON.stringify({pdfjs:require('pdfjs-dist/package.json').version,pdfLib:require('pdf-lib/package.json').version},null,2));
