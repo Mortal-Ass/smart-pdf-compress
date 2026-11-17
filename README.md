@@ -10,6 +10,8 @@
 
 页面源码位于 `docs/`，静态托管于 GitHub Pages。浏览器会为获取网页和组件向 GitHub Pages 发起请求，PDF 字节不发送到网络。尚未覆盖所有 Android / iOS 真机，请先用副本验证。
 
+手机保存会优先调用系统文件保存/文件分享；备用方式使用带文件名的二进制下载链接。预览首页在本页 canvas 内完成，不打开 `blob:` 新标签页。部分手机内置浏览器仍不支持本地下载或文件分享，遇到空白页请用 Chrome / Edge / Safari 重新打开工具并处理，勿复制 `blob:` 地址。系统分享结束不等同于确认文件已落盘，请在文件管理器确认。保存策略测试：`node --test tests/file-save.test.mjs`。
+
 手机网页开发：`npm ci` 安装锁定的依赖，`node scripts/vendor-mobile.cjs` 更新同源组件，`python -m http.server 8765 --directory docs` 本地预览。测试：`node tests/mobile-smoke.cjs 输入PDF绝对路径 输出PDF绝对路径`；此测试使用 Node 原生 canvas 检查同一份网页压缩代码，不替代手机浏览器真机测试。网页 PDF.js（Apache-2.0）、pdf-lib（MIT）及附属字体/解码器许可证保存在 `docs/vendor/`。
 
 ## Windows 一键下载

@@ -1,6 +1,7 @@
+import {saveFile, supportsFileShare} from './file-save.mjs';
 const $ = id => document.getElementById(id);
 const LIMIT = 1024 * 1024;
-let pdfjs, running = false, cancelled = false, activeRender, resultURL, resultBlob, resultName;
+let pdfjs, running = false, cancelled = false, activeRender, resultURL, resultBlob, resultName, resultFile;
 const status = message => { $('status').textContent = message; };
 const yieldUI = () => new Promise(resolve => setTimeout(resolve, 0));
 const kb = bytes => `${(bytes / 1024).toFixed(1)} KB`;
@@ -86,6 +87,8 @@ $('file').addEventListener('change',()=>{
   $('result').hidden=true;
   if(resultURL) URL.revokeObjectURL(resultURL);
   resultURL=resultBlob=null;
+  resultFile=null;
+  $('previewCanvas').hidden=true;
 });
 $('cancel').onclick=()=>{cancelled=true; activeRender?.cancel(); status('正在停止，请稍候…');};
 $('start').onclick=async()=>{
@@ -99,19 +102,50 @@ $('start').onclick=async()=>{
     const result=await compress(file,$('mode').value);ensureRunning();
     if(resultURL) URL.revokeObjectURL(resultURL);
     resultBlob=new Blob([result.bytes],{type:'application/pdf'});
-    resultURL=URL.createObjectURL(resultBlob);
+    // Generic binary MIME discourages browsers from navigating into a PDF viewer.
+    resultURL=URL.createObjectURL(new Blob([result.bytes],{type:'application/octet-stream'}));
     const ok=result.bytes.length<=LIMIT;
     resultName=file.name.replace(/\.pdf$/i,'')+(ok?'_compressed':'_OVER_LIMIT')+'.pdf';
-    $('download').href=$('preview').href=resultURL;$('download').download=resultName;
+    resultFile=new File([resultBlob],resultName,{type:'application/pdf'});
+    $('compat').href=resultURL;$('compat').download=resultName;
+    $('saveStatus').textContent='请点击保存按钮，选择系统提供的保存位置；结果仍在当前页面内存中。';
+    $('previewCanvas').hidden=true;
     $('tag').textContent=ok?'已达到 1024KB 目标':'处理完成，仍超过 1024KB';
     $('size').textContent=kb(result.bytes.length);
     $('details').textContent=`共 ${result.pages} 页，已逐页重新打开并渲染检查。${result.original?'保留原文件，未进行有损转换。':'已转为整页图片，文字不可复制，链接和交互功能丢失；小字及二维码需人工复核。'}${ok?'':'已到预设方案下限，不再降低画质。'}`;
     $('result').hidden=false;$('progress').value=100;status('处理完成，原文件未修改。');
-    $('share').hidden=!navigator.canShare?.({files:[new File([resultBlob],resultName,{type:'application/pdf'})]});
+    $('share').hidden=!supportsFileShare(resultFile);
   } catch(e) { status(cancelled?'已停止，原文件未修改。':`未能完成：${e.name==='PasswordException'?'暂不支持加密 PDF':e.message}。可尝试较小文件或电脑版本。`); }
   finally {running=false; $('file').disabled=$('mode').disabled=$('start').disabled=false;$('cancel').hidden=true;}
 };
-$('share').onclick=async()=>{try{await navigator.share({files:[new File([resultBlob],resultName,{type:'application/pdf'})]});}catch(e){if(e.name!=='AbortError')status('分享失败，请使用“保存压缩后的 PDF”。');}};
+function saveError(e) {
+  $('saveStatus').textContent=e.name==='AbortError'?'已取消保存，结果仍在，可再次点击保存。':'当前浏览器未能保存。请尝试下方系统分享或备用下载；若仍跳到 blob 空白页，请用 Chrome / Edge / Safari 重新打开工具。';
+}
+$('download').onclick=async()=>{
+  if(!resultFile)return;
+  try {
+    const mode=await saveFile(resultFile);
+    if(mode==='download') {
+      $('compat').click();
+      $('saveStatus').textContent='已请求浏览器下载，请检查下载列表。若未保存，请换用支持文件分享或下载的浏览器重试。';
+    } else $('saveStatus').textContent=mode==='saved'?'文件已写入所选位置。':'系统分享已结束，请确认文件已存储到文件管理器。';
+  } catch(e){saveError(e);}
+};
+$('share').onclick=async()=>{if(!resultFile)return;try{await navigator.share({files:[resultFile]});$('saveStatus').textContent='系统分享已结束，请检查保存位置。';}catch(e){saveError(e);}};
+$('preview').onclick=async()=>{
+  if(!resultBlob)return;
+  $('preview').disabled=true;
+  let task;
+  try {
+    task=pdfjs.getDocument({data:new Uint8Array(await resultBlob.arrayBuffer()),isEvalSupported:false});
+    const doc=await task.promise, page=await doc.getPage(1);
+    const base=page.getViewport({scale:1}), viewport=page.getViewport({scale:Math.min(1.5,1400/Math.max(base.width,base.height))});
+    const canvas=$('previewCanvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
+    await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
+    canvas.hidden=false;
+  } catch(e){$('saveStatus').textContent='首页预览失败，请先保存后使用 PDF 阅读器检查。';}
+  finally {await task?.destroy();$('preview').disabled=false;}
+};
 window.addEventListener('beforeunload',e=>{if(running){e.preventDefault();e.returnValue='';}});
 try {
   pdfjs=await import('./vendor/pdf.mjs');
