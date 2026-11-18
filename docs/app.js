@@ -29,7 +29,7 @@ async function verify(bytes, source, label) {
     }
   } finally { await task.destroy(); }
 }
-async function compress(file, mode) {
+async function compress(file, mode, focusPages = new Set()) {
   const sourceBytes = new Uint8Array(await file.arrayBuffer());
   // Already small files need no lossy conversion; still validate all pages.
   const task = pdfjs.getDocument({ data:sourceBytes.slice(), isEvalSupported:false, cMapUrl:'./vendor/cmaps/', cMapPacked:true, standardFontDataUrl:'./vendor/standard_fonts/', wasmUrl:'./vendor/wasm/' });
@@ -37,6 +37,7 @@ async function compress(file, mode) {
   const source = await task.promise;
   try {
     if (source.numPages > 100) throw new Error('手机模式最多处理 100 页，请使用电脑版本。');
+    if([...focusPages].some(n=>!Number.isInteger(n)||n<1||n>source.numPages))throw new Error('重点页码超出范围或格式不正确，请填写如 3,11');
     const profiles = mode === 'target' ? [[140,.7],[110,.5],[100,.4],[90,.32],[85,.2],[80,.2]] : [[160,.75],[130,.65],[110,.55],[100,.5]];
     if (sourceBytes.length <= LIMIT) {
       await verify(sourceBytes, source, '原文件已达标');
@@ -52,14 +53,16 @@ async function compress(file, mode) {
         $('progress').value = ((attempt+(n-1)/source.numPages)/profiles.length)*90;
         const page = await source.getPage(n);
         const base = page.getViewport({scale:1,rotation:0});
-        const scale = Math.min(dpi/72, Math.sqrt(3000000/(base.width*base.height)), 2400/Math.max(base.width,base.height));
+        const focused=focusPages.has(n);
+        const pageDpi=focused?Math.max(180,dpi*1.8):dpi;
+        const scale = Math.min(pageDpi/72, Math.sqrt(3000000/(base.width*base.height)), 2400/Math.max(base.width,base.height));
         const viewport=page.getViewport({scale,rotation:0});
         const canvas=document.createElement('canvas');
         canvas.width=Math.ceil(viewport.width); canvas.height=Math.ceil(viewport.height);
         try {
           activeRender=page.render({canvasContext:canvas.getContext('2d',{alpha:false}),viewport,background:'rgb(255,255,255)'});
           await activeRender.promise; activeRender=null; ensureRunning();
-          const image=await output.embedJpg(await jpeg(canvas,quality));
+          const image=await output.embedJpg(await jpeg(canvas,focused?Math.max(.75,quality):quality));
           const [x0,y0,x1,y1]=page.view;
           const dest=output.addPage([x1-x0,y1-y0]);
           dest.setMediaBox(x0,y0,x1-x0,y1-y0);
@@ -96,10 +99,11 @@ $('start').onclick=async()=>{
   if(!file) {status('请先选择一个 PDF 文件。');return;}
   if(!file.name.toLowerCase().endsWith('.pdf')) {status('请选择 PDF 文件。');return;}
   if(file.size>30*1024*1024) {status('文件超过 30MB，建议使用电脑版本，避免手机内存不足。');return;}
-  running=true;cancelled=false; $('file').disabled=$('mode').disabled=$('start').disabled=true;
+  const focusPages=new Set(String($('focus').value||'').replaceAll('，',',').split(',').map(s=>s.trim()).filter(Boolean).map(Number));
+  running=true;cancelled=false; $('file').disabled=$('mode').disabled=$('start').disabled=$('focus').disabled=true;
   $('cancel').hidden=false;$('result').hidden=true;$('progress').value=0;
   try {
-    const result=await compress(file,$('mode').value);ensureRunning();
+    const result=await compress(file,$('mode').value,focusPages);ensureRunning();
     if(resultURL) URL.revokeObjectURL(resultURL);
     resultBlob=new Blob([result.bytes],{type:'application/pdf'});
     // Generic binary MIME discourages browsers from navigating into a PDF viewer.
@@ -116,7 +120,7 @@ $('start').onclick=async()=>{
     $('result').hidden=false;$('progress').value=100;status('处理完成，原文件未修改。');
     $('share').hidden=!supportsFileShare(resultFile);
   } catch(e) { status(cancelled?'已停止，原文件未修改。':`未能完成：${e.name==='PasswordException'?'暂不支持加密 PDF':e.message}。可尝试较小文件或电脑版本。`); }
-  finally {running=false; $('file').disabled=$('mode').disabled=$('start').disabled=false;$('cancel').hidden=true;}
+  finally {running=false; $('file').disabled=$('mode').disabled=$('start').disabled=$('focus').disabled=false;$('cancel').hidden=true;}
 };
 function saveError(e) {
   $('saveStatus').textContent=e.name==='AbortError'?'已取消保存，结果仍在，可再次点击保存。':'当前浏览器未能保存。请尝试下方系统分享或备用下载；若仍跳到 blob 空白页，请用 Chrome / Edge / Safari 重新打开工具。';

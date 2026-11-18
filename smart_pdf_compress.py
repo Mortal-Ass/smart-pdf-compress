@@ -73,11 +73,12 @@ def main():
     parser.add_argument("input", nargs="?", type=Path)
     parser.add_argument("--output-dir", type=Path, help="输出目录，默认与原文件相同")
     parser.add_argument("--size-first", action="store_true", help="允许转为整页图片优先达标，会丢失文字选择、链接和交互功能")
+    parser.add_argument("--focus-pages", default="", help="优先保留清晰度的页码，例如 3,11")
     args = parser.parse_args()
-    compress_pdf(args.input or choose_pdf(), args.output_dir, size_first=args.size_first)
+    compress_pdf(args.input or choose_pdf(), args.output_dir, size_first=args.size_first, focus_pages=args.focus_pages)
 
 
-def raster_candidate(original, target, dpi, quality, log):
+def raster_candidate(original, target, dpi, quality, log, focus_pages=(), focus_dpi=None):
     try:
         from PIL import Image
     except ModuleNotFoundError:
@@ -90,14 +91,16 @@ def raster_candidate(original, target, dpi, quality, log):
             rotation = page.rotation
             try:
                 page.set_rotation(0)
-                pix = page.get_pixmap(dpi=dpi, alpha=False)
+                focused = page.number + 1 in focus_pages
+                page_dpi = (focus_dpi or max(180, round(dpi * 1.8))) if focused else dpi
+                pix = page.get_pixmap(dpi=page_dpi, alpha=False)
             finally:
                 page.set_rotation(rotation)
             image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             stream = BytesIO()
             # Optimized Huffman tables and chroma subsampling save space without
             # reducing luminance resolution again.
-            image.save(stream, format="JPEG", quality=quality, optimize=True, subsampling=2)
+            image.save(stream, format="JPEG", quality=max(75, quality) if focused else quality, optimize=True, subsampling=2)
             dest = result.new_page(width=page.mediabox.width, height=page.mediabox.height)
             dest.set_mediabox(page.mediabox)
             dest.set_cropbox(page.cropbox)
@@ -106,7 +109,7 @@ def raster_candidate(original, target, dpi, quality, log):
         result.save(target, garbage=3, deflate=True, use_objstms=1)
 
 
-def compress_pdf(source, output_dir=None, log=print, size_first=False):
+def compress_pdf(source, output_dir=None, log=print, size_first=False, focus_pages=""):
     print = log
     source = Path(source).resolve()
     if not source.is_file() or source.suffix.lower() != ".pdf":
@@ -119,6 +122,9 @@ def compress_pdf(source, output_dir=None, log=print, size_first=False):
         if any(original.get_sigflags() > 0 for _ in [0]):
             raise ValueError("检测到签名字段；压缩可能使数字签名失效，请先提供无签名副本")
         candidates = []
+        focus_pages = {int(p.strip()) for p in focus_pages.replace("，", ",").split(",") if p.strip()}
+        if any(p < 1 or p > len(original) for p in focus_pages):
+            raise ValueError("重点清晰页的页码超出文件范围")
         # Index placements once, including every occurrence of shared images.
         placements = {}
         print(f"共 {len(original)} 页，正在建立图片索引……", flush=True)
@@ -180,18 +186,18 @@ def compress_pdf(source, output_dir=None, log=print, size_first=False):
             size = target.stat().st_size
             candidates.append((size, target, dpi, quality))
             print(f"方案 {index}: {size / 1024:.1f} KB; DPI={dpi}, JPEG={quality}; 全部页面已重新打开并渲染")
-            if size <= LIMIT:
+            if size <= LIMIT and not (size_first and focus_pages):
                 break
         raster_paths = set()
         raster_choice = None
-        if size_first and not any(c[0] <= LIMIT for c in candidates):
+        if size_first and (focus_pages or not any(c[0] <= LIMIT for c in candidates)):
             print("结构保留方案未达标，开始有限的整页图片方案；文字选择、链接和交互功能将丢失。")
             previous = None
             for dpi, quality in [(300, 85), (240, 85), (200, 85), (160, 85),
                                  (130, 65), (110, 50), (100, 40), (90, 32),
                                  (90, 20), (85, 20), (80, 20)]:
                 target = Path(temp) / f"raster_{dpi}_{quality}.pdf"
-                raster_candidate(original, target, dpi, quality, log)
+                raster_candidate(original, target, dpi, quality, log, focus_pages)
                 check(target, original, log, compare_text=False)
                 size = target.stat().st_size
                 raster_paths.add(target)
@@ -209,7 +215,7 @@ def compress_pdf(source, output_dir=None, log=print, size_first=False):
                                 break
                             refined = Path(temp) / f"refined_{mid}_{quality}.pdf"
                             print(f"利用剩余空间提高画质：{mid} DPI，JPEG {quality}", flush=True)
-                            raster_candidate(original, refined, mid, quality, log)
+                            raster_candidate(original, refined, mid, quality, log, focus_pages)
                             refined_size = refined.stat().st_size
                             if refined_size <= LIMIT:
                                 check(refined, original, log, compare_text=False)
@@ -220,6 +226,26 @@ def compress_pdf(source, output_dir=None, log=print, size_first=False):
                                 high = mid
                     break
                 previous = (dpi, quality)
+        selected_focus_dpi = None
+        if raster_choice and focus_pages:
+            _, _, base_dpi, base_quality = raster_choice
+            low, high = max(180, round(base_dpi * 1.8)), 240
+            selected_focus_dpi = low
+            for _ in range(6):
+                mid = (low + high) // 2
+                if mid <= low:
+                    break
+                refined = Path(temp) / f"focus_refined_{mid}.pdf"
+                print(f"利用剩余空间提升重点页：{mid} DPI", flush=True)
+                raster_candidate(original, refined, base_dpi, base_quality, log, focus_pages, mid)
+                size = refined.stat().st_size
+                if size <= LIMIT:
+                    check(refined, original, log, compare_text=False)
+                    raster_paths.add(refined)
+                    raster_choice = (size, refined, base_dpi, base_quality)
+                    low = selected_focus_dpi = mid
+                else:
+                    high = mid
         best = raster_choice or next((c for c in candidates if c[0] <= LIMIT), min(candidates))
         size, path, dpi, quality = best
         rasterized = path in raster_paths
@@ -238,6 +264,8 @@ def compress_pdf(source, output_dir=None, log=print, size_first=False):
                   "limit_bytes": LIMIT, "within_limit": size <= LIMIT, "dpi": dpi, "jpeg_quality": quality,
                   "all_pages_rendered": True, "geometry_rotation_checked": True,
                   "text_preserved": not rasterized, "rasterized": rasterized,
+                  "focus_pages": sorted(focus_pages) if rasterized else [],
+                  "focus_dpi": selected_focus_dpi if rasterized else None,
                   "risk": ("已转为整页图片，文字无法选中复制，链接和交互功能丢失；小字、照片、印章可能模糊，二维码需实际扫码验证。"
                            if rasterized else "图片有损压缩可能影响照片、印章和扫描小字；请人工放大复核。" if dpi else "无图片有损重编码。")}
         print(json.dumps(report, ensure_ascii=False, indent=2))

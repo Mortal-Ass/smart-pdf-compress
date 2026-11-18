@@ -25,6 +25,7 @@ class App:
         self.path = tk.StringVar()
         self.folder = tk.StringVar()
         self.size_first = tk.BooleanVar(value=False)
+        self.focus_pages = tk.StringVar()
         self.status = tk.StringVar(value="请先选择一个 PDF 文件")
         box = ttk.Frame(root, padding=24)
         box.pack(fill="both", expand=True)
@@ -42,6 +43,10 @@ class App:
         self.mode = ttk.Checkbutton(box, text="优先达标：允许转成图片（文字不可复制，链接丢失，小字及二维码可能变糊）", variable=self.size_first)
         self.mode.pack(anchor="w", pady=(0, 8))
         self.buttons.append(self.mode)
+        ttk.Label(box, text="重点清晰页（可选，如 3,11；需勾选优先达标）").pack(anchor="w")
+        self.focus_entry = ttk.Entry(box, textvariable=self.focus_pages)
+        self.focus_entry.pack(fill="x", pady=(0, 8))
+        self.buttons.append(self.focus_entry)
         self.start_button = ttk.Button(box, text="开始压缩", command=self.start)
         self.start_button.pack(anchor="w")
         self.buttons.append(self.start_button)
@@ -84,11 +89,11 @@ class App:
         self.status.set("正在压缩，大文件可能需要几分钟，请等待进度更新……")
         self.bar.start()
         source, folder = self.path.get(), self.folder.get()
-        threading.Thread(target=self.work, args=(source, folder, self.size_first.get()), daemon=True).start()
+        threading.Thread(target=self.work, args=(source, folder, self.size_first.get(), self.focus_pages.get()), daemon=True).start()
 
-    def work(self, source, folder, size_first):
+    def work(self, source, folder, size_first, focus_pages):
         try:
-            result = compress_pdf(source, folder, log=lambda *values, **kw: self.events.put(("log", " ".join(map(str, values)))), size_first=size_first)
+            result = compress_pdf(source, folder, log=lambda *values, **kw: self.events.put(("log", " ".join(map(str, values)))), size_first=size_first, focus_pages=focus_pages)
             self.events.put(("done", result))
         except BaseException as exc:
             self.events.put(("error", str(exc)))

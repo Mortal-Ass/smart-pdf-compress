@@ -25,6 +25,7 @@ URL.revokeObjectURL=()=>{};
   const input=path.resolve(process.argv[2]);
   el('file').files=[new File([fs.readFileSync(input)],path.basename(input),{type:'application/pdf'})];
   el('mode').value='target';
+  el('focus').value=process.env.FOCUS_PAGES||'';
   await el('start').onclick();
   if(el('result').hidden || !output)throw Error(el('status').textContent);
   const bytes=Buffer.from(await output.arrayBuffer());
