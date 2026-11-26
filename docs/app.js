@@ -11,6 +11,31 @@ async function jpeg(canvas, quality) {
   if (!blob) throw new Error('手机未能编码页面图片，可能内存不足。');
   return new Uint8Array(await blob.arrayBuffer());
 }
+function detailRegions(text, pages) {
+  const regions = new Map();
+  for (const item of text.split(';').filter(s => s.trim())) {
+    const [pageText, box, extra] = item.split(':');
+    const page = Number(pageText), coords = (box || '').split(',').map(Number);
+    const [left, top, right, bottom] = coords;
+    if (extra !== undefined || !Number.isInteger(page) || page < 1 || page > pages ||
+        coords.length !== 4 || !(0 <= left && left < right && right <= 100 && 0 <= top && top < bottom && bottom <= 100))
+      throw new Error('局部区域请按 页码:左,上,右,下 填写，坐标为 0 到 100 的百分比');
+    if (!regions.has(page)) regions.set(page, []);
+    regions.get(page).push(coords);
+  }
+  return regions;
+}
+async function budgetJpeg(canvas, budget) {
+  let low = .16, high = .92, best = await jpeg(canvas, low);
+  for (let i = 0; i < 5; i++) {
+    ensureRunning();
+    const mid = (low + high) / 2;
+    const data = await jpeg(canvas, mid);
+    if (data.length <= budget) { best = data; low = mid; }
+    else high = mid;
+  }
+  return best;
+}
 async function verify(bytes, source, label) {
   const task = pdfjs.getDocument({ data: bytes.slice(), isEvalSupported: false });
   const doc = await task.promise;
@@ -38,6 +63,9 @@ async function compress(file, mode, focusPages = new Set()) {
   try {
     if (source.numPages > 100) throw new Error('手机模式最多处理 100 页，请使用电脑版本。');
     if([...focusPages].some(n=>!Number.isInteger(n)||n<1||n>source.numPages))throw new Error('重点页码超出范围或格式不正确，请填写如 3,11');
+    const regions = detailRegions(String($('regions').value || ''), source.numPages);
+    if (regions.size && mode !== 'target') throw new Error('局部区域需要选择大小优先模式');
+    const weights = source.numPages + focusPages.size * 1.8;
     const profiles = mode === 'target' ? [[140,.7],[110,.5],[100,.4],[90,.32],[85,.2],[80,.2]] : [[160,.75],[130,.65],[110,.55],[100,.5]];
     if (sourceBytes.length <= LIMIT) {
       await verify(sourceBytes, source, '原文件已达标');
@@ -62,12 +90,33 @@ async function compress(file, mode, focusPages = new Set()) {
         try {
           activeRender=page.render({canvasContext:canvas.getContext('2d',{alpha:false}),viewport,background:'rgb(255,255,255)'});
           await activeRender.promise; activeRender=null; ensureRunning();
-          const image=await output.embedJpg(await jpeg(canvas,focused?Math.max(.75,quality):quality));
+          const parts = [];
+          for (const [l,t,r,b] of regions.get(n) || []) {
+            const patch = document.createElement('canvas');
+            const factor = Math.min(200/72, 2400/base.width, 2400/base.height);
+            const pv = page.getViewport({scale:factor,rotation:0});
+            patch.width = Math.max(1,Math.ceil(pv.width*(r-l)/100));
+            patch.height = Math.max(1,Math.ceil(pv.height*(b-t)/100));
+            try {
+              activeRender = page.render({canvasContext:patch.getContext('2d'), viewport:pv,
+                transform:[1,0,0,1,-pv.width*l/100,-pv.height*t/100],background:'white'});
+              await activeRender.promise;
+              parts.push({l,t,r,b,data:await jpeg(patch,.85)});
+            } finally { activeRender=null; patch.width=patch.height=1; }
+          }
+          const budget = (LIMIT-1800-source.numPages*650)*(focused?2.8:1)/weights
+            - parts.reduce((sum,p)=>sum+p.data.length+350,0);
+          const data = mode === 'target' ? await budgetJpeg(canvas,budget) : await jpeg(canvas,focused?Math.max(.75,quality):quality);
+          const image=await output.embedJpg(data);
           const [x0,y0,x1,y1]=page.view;
           const dest=output.addPage([x1-x0,y1-y0]);
           dest.setMediaBox(x0,y0,x1-x0,y1-y0);
           dest.setCropBox(x0,y0,x1-x0,y1-y0);
           dest.drawImage(image,{x:x0,y:y0,width:x1-x0,height:y1-y0});
+          for (const {l,t,r,b,data} of parts) {
+            dest.drawImage(await output.embedJpg(data),{x:x0+(x1-x0)*l/100,y:y0+(y1-y0)*(100-b)/100,
+              width:(x1-x0)*(r-l)/100,height:(y1-y0)*(b-t)/100});
+          }
           dest.setRotation(PDFLib.degrees(page.rotate));
         } finally { activeRender=null; canvas.width=canvas.height=1; page.cleanup(); }
         await yieldUI();

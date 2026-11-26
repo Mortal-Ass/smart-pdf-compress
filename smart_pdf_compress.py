@@ -74,8 +74,9 @@ def main():
     parser.add_argument("--output-dir", type=Path, help="输出目录，默认与原文件相同")
     parser.add_argument("--size-first", action="store_true", help="允许转为整页图片优先达标，会丢失文字选择、链接和交互功能")
     parser.add_argument("--focus-pages", default="", help="优先保留清晰度的页码，例如 3,11")
+    parser.add_argument("--regions", default="", help="局部清晰区域，如 1:72,10,93,34；多个区域用英文分号隔开")
     args = parser.parse_args()
-    compress_pdf(args.input or choose_pdf(), args.output_dir, size_first=args.size_first, focus_pages=args.focus_pages)
+    compress_pdf(args.input or choose_pdf(), args.output_dir, size_first=args.size_first, focus_pages=args.focus_pages, regions=args.regions)
 
 
 def raster_candidate(original, target, dpi, quality, log, focus_pages=(), focus_dpi=None):
@@ -109,7 +110,7 @@ def raster_candidate(original, target, dpi, quality, log, focus_pages=(), focus_
         result.save(target, garbage=3, deflate=True, use_objstms=1)
 
 
-def compress_pdf(source, output_dir=None, log=print, size_first=False, focus_pages=""):
+def compress_pdf(source, output_dir=None, log=print, size_first=False, focus_pages="", regions=""):
     print = log
     source = Path(source).resolve()
     if not source.is_file() or source.suffix.lower() != ".pdf":
@@ -125,6 +126,12 @@ def compress_pdf(source, output_dir=None, log=print, size_first=False, focus_pag
         focus_pages = {int(p.strip()) for p in focus_pages.replace("，", ",").split(",") if p.strip()}
         if any(p < 1 or p > len(original) for p in focus_pages):
             raise ValueError("重点清晰页的页码超出文件范围")
+        from detail_compress import parse_regions, detail_candidate
+        regions = parse_regions(regions, len(original))
+        if regions and not size_first:
+            raise ValueError("局部区域保护需要勾选优先达标")
+        detail_path = None
+        qr_count = None
         # Index placements once, including every occurrence of shared images.
         placements = {}
         print(f"共 {len(original)} 页，正在建立图片索引……", flush=True)
@@ -186,11 +193,18 @@ def compress_pdf(source, output_dir=None, log=print, size_first=False, focus_pag
             size = target.stat().st_size
             candidates.append((size, target, dpi, quality))
             print(f"方案 {index}: {size / 1024:.1f} KB; DPI={dpi}, JPEG={quality}; 全部页面已重新打开并渲染")
-            if size <= LIMIT and not (size_first and focus_pages):
+            if size_first and index == 0 and size > LIMIT:
+                detail_path = Path(temp) / "detail.pdf"
+                qr_count = detail_candidate(original, detail_path, LIMIT, focus_pages, regions, log)
+                check(detail_path, original, log, compare_text=False)
+                candidates.append((detail_path.stat().st_size, detail_path, None, None))
+                if detail_path.stat().st_size <= LIMIT or qr_count or regions:
+                    break
+            if size <= LIMIT:
                 break
-        raster_paths = set()
+        raster_paths = {detail_path} if detail_path else set()
         raster_choice = None
-        if size_first and (focus_pages or not any(c[0] <= LIMIT for c in candidates)):
+        if size_first and not qr_count and not regions and not any(c[0] <= LIMIT for c in candidates):
             print("结构保留方案未达标，开始有限的整页图片方案；文字选择、链接和交互功能将丢失。")
             previous = None
             for dpi, quality in [(300, 85), (240, 85), (200, 85), (160, 85),
@@ -265,6 +279,8 @@ def compress_pdf(source, output_dir=None, log=print, size_first=False, focus_pag
                   "all_pages_rendered": True, "geometry_rotation_checked": True,
                   "text_preserved": not rasterized, "rasterized": rasterized,
                   "focus_pages": sorted(focus_pages) if rasterized else [],
+                  "method": "page_budget_jpeg2000" if path == detail_path else "standard",
+                  "verified_qr_codes": qr_count if path == detail_path else None,
                   "focus_dpi": selected_focus_dpi if rasterized else None,
                   "risk": ("已转为整页图片，文字无法选中复制，链接和交互功能丢失；小字、照片、印章可能模糊，二维码需实际扫码验证。"
                            if rasterized else "图片有损压缩可能影响照片、印章和扫描小字；请人工放大复核。" if dpi else "无图片有损重编码。")}

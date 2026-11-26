@@ -47,6 +47,11 @@ class App:
         self.focus_entry = ttk.Entry(box, textvariable=self.focus_pages)
         self.focus_entry.pack(fill="x", pady=(0, 8))
         self.buttons.append(self.focus_entry)
+        self.regions = tk.StringVar()
+        ttk.Label(box, text="局部清晰区域（可选） 页码:左,上,右,下，按百分比，如 1:70,10,95,35").pack(anchor="w")
+        region_entry = ttk.Entry(box, textvariable=self.regions)
+        region_entry.pack(fill="x")
+        self.buttons.append(region_entry)
         self.start_button = ttk.Button(box, text="开始压缩", command=self.start)
         self.start_button.pack(anchor="w")
         self.buttons.append(self.start_button)
@@ -89,11 +94,11 @@ class App:
         self.status.set("正在压缩，大文件可能需要几分钟，请等待进度更新……")
         self.bar.start()
         source, folder = self.path.get(), self.folder.get()
-        threading.Thread(target=self.work, args=(source, folder, self.size_first.get(), self.focus_pages.get()), daemon=True).start()
+        threading.Thread(target=self.work, args=(source, folder, self.size_first.get(), self.focus_pages.get(), self.regions.get()), daemon=True).start()
 
-    def work(self, source, folder, size_first, focus_pages):
+    def work(self, source, folder, size_first, focus_pages, regions):
         try:
-            result = compress_pdf(source, folder, log=lambda *values, **kw: self.events.put(("log", " ".join(map(str, values)))), size_first=size_first, focus_pages=focus_pages)
+            result = compress_pdf(source, folder, log=lambda *values, **kw: self.events.put(("log", " ".join(map(str, values)))), size_first=size_first, focus_pages=focus_pages, regions=regions)
             self.events.put(("done", result))
         except BaseException as exc:
             self.events.put(("error", str(exc)))
